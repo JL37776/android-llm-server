@@ -131,7 +131,7 @@ object PerformanceManager {
 
             // Sustained Performance Mode — only effective on devices that
             // advertise support. On devices that don't, this call is a no-op.
-            // minSdk = 36, so setSustainedPerformanceMode (added in API 24) is always available.
+            // setSustainedPerformanceMode requires API 24, safe for minSdk 35.
             if (supportsSustainedPerf) {
                 try {
                     window.setSustainedPerformanceMode(true)
@@ -212,7 +212,7 @@ object PerformanceManager {
     }
 
     private fun registerThermalListener(context: Context) {
-        // minSdk = 36, so OnThermalStatusChangedListener (added in API 29) is always available.
+        // OnThermalStatusChangedListener requires API 29, safe for minSdk 35.
         val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         val listener =
             PowerManager.OnThermalStatusChangedListener { status ->

@@ -111,7 +111,7 @@ class DashboardViewModel(
                 context: Context?,
                 intent: Intent?,
             ) {
-                // minSdk = 36, so the type-safe getParcelableExtra (added in API 33) is always available.
+                // Type-safe getParcelableExtra requires API 33, safe for minSdk 35.
                 val state = intent?.getParcelableExtra(LlmServerService.EXTRA_SERVICE_STATE, ServiceState::class.java)
                 state?.let {
                     Logger.i(TAG, "Received service state: $it")
@@ -131,7 +131,7 @@ class DashboardViewModel(
                 context: Context?,
                 intent: Intent?,
             ) {
-                // minSdk = 36, so the type-safe getParcelableExtra (added in API 33) is always available.
+                // Type-safe getParcelableExtra requires API 33, safe for minSdk 35.
                 val metrics = intent?.getParcelableExtra(LlmServerService.EXTRA_METRICS, PerformanceMetrics::class.java)
                 metrics?.let {
                     Logger.d(TAG, "Received metrics: ${it.decodeTokensPerSecond} tk/s")
@@ -152,7 +152,7 @@ class DashboardViewModel(
                 val sourceIp = intent.getStringExtra(LlmServerService.EXTRA_LOG_SOURCE_IP) ?: "unknown"
                 val statusCode = intent.getIntExtra(LlmServerService.EXTRA_LOG_STATUS, 0)
 
-                // minSdk = 36, so the type-safe getParcelableExtra (added in API 33) is always available.
+                // Type-safe getParcelableExtra requires API 33, safe for minSdk 35.
                 val metrics = intent.getParcelableExtra(LlmServerService.EXTRA_LOG_METRICS, PerformanceMetrics::class.java)
 
                 val logEntry =

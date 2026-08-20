@@ -177,7 +177,7 @@ class MainActivity : ComponentActivity() {
      * they can grant it later in Settings → Apps → Notifications.
      */
     private fun requestNotificationPermission() {
-        // minSdk = 36, so we're always on Android 13+ where POST_NOTIFICATIONS exists
+        // minSdk = 35, so we're always on Android 13+ where POST_NOTIFICATIONS exists
         when {
             ContextCompat.checkSelfPermission(
                 this,
@@ -215,7 +215,7 @@ class MainActivity : ComponentActivity() {
      */
     @android.annotation.SuppressLint("BatteryLife")
     private fun requestBatteryOptimizationExemption() {
-        // minSdk = 36, so ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS (added in API 23) is always available.
+        // ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS requires API 23, safe for minSdk 35.
         try {
             val intent =
                 Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {

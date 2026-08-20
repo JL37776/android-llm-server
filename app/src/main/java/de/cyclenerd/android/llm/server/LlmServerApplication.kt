@@ -59,11 +59,11 @@ class LlmServerApplication : Application() {
     }
 
     private fun disableStrictMode() {
-        StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.LAX)
-        StrictMode.setVmPolicy(StrictMode.VmPolicy.LAX)
+        StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.Builder().build())
+        StrictMode.setVmPolicy(StrictMode.VmPolicy.Builder().build())
     }
 
-    // minSdk = 36, so SOC_MANUFACTURER / SOC_MODEL (added in API 31) are always available.
+    // SOC_MANUFACTURER / SOC_MODEL added in API 31, safe for minSdk 35.
     private fun socName(): String = "${Build.SOC_MANUFACTURER}/${Build.SOC_MODEL}"
 
     private companion object {

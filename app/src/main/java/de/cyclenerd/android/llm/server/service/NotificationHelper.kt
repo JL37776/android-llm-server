@@ -23,10 +23,9 @@ import de.cyclenerd.android.llm.server.ui.MainActivity
  * - Android requirement: Foreground service without notification gets killed
  *
  * Notification importance:
- * We use IMPORTANCE_LOW which means:
- * - No sound or vibration (silent)
- * - Shows in status bar but doesn't interrupt
- * - Appropriate for long-running background services
+ * We use IMPORTANCE_DEFAULT so that aggressive OEM power managers
+ * (HyperOS, MIUI, ColorOS) treat the foreground service as important
+ * enough to survive screen-off and Doze.
  */
 object NotificationHelper {
     private const val CHANNEL_ID = "llm_server_channel"
@@ -40,14 +39,10 @@ object NotificationHelper {
      * Required on Android O (API 26)+. Channels let users control
      * notification behavior per category (sound, vibration, priority).
      *
-     * Why IMPORTANCE_LOW?
-     * Our server is a background service that doesn't need to interrupt
-     * the user. Low importance means:
-     * - Silent (no sound/vibration)
-     * - Shows in status bar
-     * - Doesn't peek down from top
-     *
-     * This must be called before creating notifications.
+     * Why IMPORTANCE_DEFAULT?
+     * OEM skins (HyperOS, MIUI, ColorOS) may kill foreground services
+     * whose notification channel is IMPORTANCE_LOW during screen-off.
+     * IMPORTANCE_DEFAULT keeps the service alive without being intrusive.
      *
      * @param context Application context
      */
@@ -56,7 +51,7 @@ object NotificationHelper {
             NotificationChannel(
                 CHANNEL_ID,
                 "LLM Server",
-                NotificationManager.IMPORTANCE_LOW,
+                NotificationManager.IMPORTANCE_DEFAULT,
             ).apply {
                 description = "Shows when the local LLM inference server is running"
                 setShowBadge(false) // Don't show app icon badge
@@ -79,9 +74,9 @@ object NotificationHelper {
      * This is important because dismissing the notification would make the
      * service invisible to the user while still using resources.
      *
-     * Why LOW priority?
-     * Server is a background service that shouldn't interrupt users.
-     * LOW priority ensures silent, non-intrusive notifications.
+     * Why DEFAULT priority?
+     * Matches the IMPORTANCE_DEFAULT channel so OEM power managers
+     * keep the foreground service alive during screen-off.
      *
      * Stop action:
      * Users can stop the server directly from the notification without
@@ -116,7 +111,8 @@ object NotificationHelper {
                 .setContentTitle("Local LLM Server")
                 .setContentText(state.toDisplayText())
                 .setOngoing(true)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
                 .setContentIntent(openAppPendingIntent)
                 .setCategory(NotificationCompat.CATEGORY_SERVICE)
 

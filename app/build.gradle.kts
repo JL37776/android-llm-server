@@ -12,8 +12,8 @@ android {
 
     defaultConfig {
         applicationId = "de.cyclenerd.android.llm.server"
-        minSdk = 36
-        targetSdk = 37
+        minSdk = 35
+        targetSdk = 36
         // ---------------------------------------------------------------
         // VERSION — single source of truth.
         //
@@ -92,7 +92,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_21
 
         // Enable core library desugaring is intentionally off — we target
-        // SDK 36+ which natively supports all java.time/util features we use,
+        // SDK 35+ which natively supports all java.time/util features we use,
         // and skipping desugaring shaves a step from D8/R8.
     }
 
