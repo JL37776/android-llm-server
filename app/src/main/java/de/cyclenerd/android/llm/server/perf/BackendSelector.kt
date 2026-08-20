@@ -123,9 +123,9 @@ object BackendSelector {
     }
 
     private fun isModernQualcomm(socModel: String): Boolean {
-        // Snapdragon 8 Gen 1 (sm8450) had HTP but LiteRT support is shaky.
-        // Cleanly support 8 Gen 2 (sm8550) and newer.
-        val gen2plus = listOf("sm8550", "sm8650", "sm8750", "sm8475", "sm7550", "sm7650")
+        // Snapdragon 8 Gen 1 (sm8450) and 8+ Gen 1 (sm8475) have HTP but
+        // LiteRT's NPU backend does not support them. Only 8 Gen 2+ works.
+        val gen2plus = listOf("sm8550", "sm8650", "sm8750", "sm7550", "sm7650")
         return gen2plus.any { socModel.contains(it) }
     }
 

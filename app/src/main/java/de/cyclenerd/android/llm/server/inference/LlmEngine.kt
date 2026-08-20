@@ -85,28 +85,38 @@ class LlmEngine(
                 @OptIn(ExperimentalApi::class)
                 ExperimentalFlags.enableSpeculativeDecoding = true
 
-                val config =
-                    EngineConfig(
-                        modelPath = modelPath,
-                        backend = accelerationType.toLiteRtBackend(),
-                        cacheDir = cacheDir,
-                    )
+                val fallbackChain = buildFallbackChain(accelerationType)
+                var lastException: Exception? = null
 
-                val startTime = System.currentTimeMillis()
-                try {
-                    engine = Engine(config).also { it.initialize() }
-                } catch (e: OutOfMemoryError) {
-                    Logger.e(TAG, "Insufficient memory to load model", e)
-                    throw IllegalStateException("Out of memory: model too large for device", e)
-                } catch (e: Exception) {
-                    Logger.e(TAG, "Failed to initialize engine", e)
-                    engine?.close()
-                    engine = null
-                    throw e
+                for (backend in fallbackChain) {
+                    val config =
+                        EngineConfig(
+                            modelPath = modelPath,
+                            backend = backend.toLiteRtBackend(),
+                            cacheDir = cacheDir,
+                        )
+
+                    val startTime = System.currentTimeMillis()
+                    try {
+                        engine = Engine(config).also { it.initialize() }
+                        val duration = System.currentTimeMillis() - startTime
+                        Logger.i(TAG, "Engine initialized in $duration ms (${backend.displayName()} backend)")
+                        lastException = null
+                        break
+                    } catch (e: OutOfMemoryError) {
+                        Logger.e(TAG, "Insufficient memory to load model", e)
+                        throw IllegalStateException("Out of memory: model too large for device", e)
+                    } catch (e: Exception) {
+                        Logger.w(TAG, "${backend.displayName()} backend failed: ${e.message}")
+                        engine?.close()
+                        engine = null
+                        lastException = e
+                    }
                 }
 
-                val duration = System.currentTimeMillis() - startTime
-                Logger.i(TAG, "Engine initialized in $duration ms")
+                if (lastException != null) {
+                    throw lastException
+                }
                 isInitialized = true
 
                 if (warmUp) {
@@ -185,6 +195,13 @@ class LlmEngine(
     }
 
     fun getModelName(): String? = modelName
+
+    private fun buildFallbackChain(primary: AccelerationType): List<AccelerationType> =
+        when (primary) {
+            is AccelerationType.NPU -> listOf(primary, AccelerationType.GPU, AccelerationType.CPU)
+            is AccelerationType.GPU -> listOf(primary, AccelerationType.CPU)
+            is AccelerationType.CPU -> listOf(primary)
+        }
 
     companion object {
         private const val TAG = "LlmEngine"
