@@ -22,6 +22,18 @@ object ToolCallParser {
         RegexOption.DOT_MATCHES_ALL,
     )
 
+    // Gemma native format: <|tool_call>call:function_name{args}<tool_call|>
+    private val gemmaToolCallRegex = Regex(
+        """<\|tool_call>call:(\w+)(\{.*?\})<tool_call\|>""",
+        RegexOption.DOT_MATCHES_ALL,
+    )
+
+    // Combined regex for stripping all tool call tags from output
+    private val allToolCallRegex = Regex(
+        """(<tool_call>\s*\{.*?\}\s*</tool_call>|<\|tool_call>call:\w+\{.*?\}<tool_call\|>)""",
+        RegexOption.DOT_MATCHES_ALL,
+    )
+
     fun buildToolSystemPrompt(
         tools: List<ToolDefinition>,
         existingSystem: String?,
@@ -34,7 +46,7 @@ object ToolCallParser {
 
         sb.appendLine("# Tools")
         sb.appendLine()
-        sb.appendLine("You have access to the following tools. When you need to call a tool, output EXACTLY this format:")
+        sb.appendLine("You have access to the following tools. To call a tool, use this format:")
         sb.appendLine()
         sb.appendLine("""<tool_call>""")
         sb.appendLine("""{"name": "tool_name", "arguments": {"param1": "value1"}}""")
@@ -76,15 +88,11 @@ object ToolCallParser {
             return ParseResult(content = response, toolCalls = null)
         }
 
-        val matches = toolCallRegex.findAll(response).toList()
-        if (matches.isEmpty()) {
-            return ParseResult(content = response, toolCalls = null)
-        }
-
         val toolNames = availableTools.map { it.function.name }.toSet()
         val parsed = mutableListOf<ToolCall>()
 
-        for (match in matches) {
+        // Try instructed format: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+        for (match in toolCallRegex.findAll(response)) {
             try {
                 val jsonStr = match.groupValues[1].trim()
                 val obj = lenientJson.parseToJsonElement(jsonStr).jsonObject
@@ -94,15 +102,25 @@ object ToolCallParser {
                     continue
                 }
                 val args = obj["arguments"]?.toString() ?: "{}"
-                parsed.add(
-                    ToolCall(
-                        id = "call_${UUID.randomUUID().toString().replace("-", "").take(24)}",
-                        type = "function",
-                        function = FunctionCallResult(name = name, arguments = args),
-                    ),
-                )
+                parsed.add(makeToolCall(name, args))
             } catch (e: Exception) {
-                Logger.w(TAG, "Failed to parse tool call: ${e.message}")
+                Logger.w(TAG, "Failed to parse instructed tool call: ${e.message}")
+            }
+        }
+
+        // Try Gemma native format: <|tool_call>call:func_name{args}<tool_call|>
+        for (match in gemmaToolCallRegex.findAll(response)) {
+            try {
+                val name = match.groupValues[1]
+                if (name !in toolNames) {
+                    Logger.w(TAG, "Model called unknown tool: $name, skipping")
+                    continue
+                }
+                val rawArgs = match.groupValues[2].trim()
+                val fixedArgs = quoteJsonKeys(rawArgs)
+                parsed.add(makeToolCall(name, fixedArgs))
+            } catch (e: Exception) {
+                Logger.w(TAG, "Failed to parse Gemma tool call: ${e.message}")
             }
         }
 
@@ -110,11 +128,24 @@ object ToolCallParser {
             return ParseResult(content = response, toolCalls = null)
         }
 
-        val textOutsideToolCalls = toolCallRegex.replace(response, "").trim()
-        val content = textOutsideToolCalls.ifBlank { null }
+        val textOutside = allToolCallRegex.replace(response, "").trim()
+        val content = textOutside.ifBlank { null }
 
         return ParseResult(content = content, toolCalls = parsed)
     }
+
+    private fun makeToolCall(name: String, arguments: String): ToolCall =
+        ToolCall(
+            id = "call_${UUID.randomUUID().toString().replace("-", "").take(24)}",
+            type = "function",
+            function = FunctionCallResult(name = name, arguments = arguments),
+        )
+
+    // {location: "Tokyo"} -> {"location": "Tokyo"}
+    private fun quoteJsonKeys(s: String): String =
+        s.replace(Regex("""([{,])\s*(\w+)\s*:""")) { m ->
+            "${m.groupValues[1]}\"${m.groupValues[2]}\":"
+        }
 
     fun formatToolResultForHistory(toolCallId: String?, name: String?, content: String?): String {
         val sb = StringBuilder()
