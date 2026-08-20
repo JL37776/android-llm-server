@@ -111,6 +111,8 @@ object NotificationHelper {
                 .setContentTitle("Local LLM Server")
                 .setContentText(state.toDisplayText())
                 .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setSilent(true)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
                 .setContentIntent(openAppPendingIntent)
