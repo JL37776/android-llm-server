@@ -2,56 +2,78 @@ package de.cyclenerd.android.llm.server.server.models
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
-/**
- * A single chat message in the OpenAI format.
- *
- * The wire format follows the OpenAI Chat Completions API as documented at
- * https://platform.openai.com/docs/api-reference/chat. Only the subset of
- * fields meaningful for a local single-user LLM server is modelled here —
- * sampler tuning fields are accepted but ignored (LiteRT uses our global
- * sampling configuration), and `max_tokens` is also ignored to avoid
- * truncated responses.
- *
- * @property role One of "system", "user", "assistant".
- * @property content The textual content of the message. (Multimodal content
- *  is not yet supported by this server.)
- */
 @Serializable
 data class ChatMessage(
     val role: String,
-    val content: String,
+    val content: String? = null,
+    @SerialName("tool_calls") val toolCalls: List<ToolCall>? = null,
+    @SerialName("tool_call_id") val toolCallId: String? = null,
+    val name: String? = null,
 )
 
-/**
- * The full request body for `POST /v1/chat/completions`.
- *
- * @property model Name of the model the client wants to talk to. We use it
- *  only as an echo in the response — the server only loads one model at a
- *  time.
- * @property messages Conversation history including the new user prompt.
- * @property temperature **Ignored.** Provided for OpenAI SDK compatibility.
- * @property topP **Ignored.** Same.
- * @property maxTokens **Ignored.** LiteRT generates complete responses to
- *  avoid truncated sentences. The field is still validated to reject
- *  obviously malformed values (zero / negative) for client diagnostics.
- * @property stream If true, the server responds with Server-Sent Events.
- */
 @Serializable
 data class ChatCompletionRequest(
     val model: String,
     val messages: List<ChatMessage>,
     val temperature: Float? = null,
     @SerialName("top_p") val topP: Float? = null,
+    @SerialName("top_k") val topK: Int? = null,
     @SerialName("max_tokens") val maxTokens: Int? = null,
     val stream: Boolean = false,
+    val tools: List<ToolDefinition>? = null,
+    @SerialName("tool_choice") val toolChoice: JsonElement? = null,
+    val stop: JsonElement? = null,
+    @SerialName("response_format") val responseFormat: ResponseFormat? = null,
 )
 
-/**
- * Reason the model stopped generating tokens.
- *
- * Mirrors OpenAI's `finish_reason` enum on the wire (lower-case strings).
- */
+@Serializable
+data class ResponseFormat(
+    val type: String = "text",
+)
+
+@Serializable
+data class ToolDefinition(
+    val type: String = "function",
+    val function: FunctionDefinition,
+)
+
+@Serializable
+data class FunctionDefinition(
+    val name: String,
+    val description: String? = null,
+    val parameters: JsonObject? = null,
+)
+
+@Serializable
+data class ToolCall(
+    val id: String,
+    val type: String = "function",
+    val function: FunctionCallResult,
+)
+
+@Serializable
+data class FunctionCallResult(
+    val name: String,
+    val arguments: String,
+)
+
+@Serializable
+data class StreamingToolCall(
+    val index: Int,
+    val id: String? = null,
+    val type: String? = null,
+    val function: StreamingFunctionCall? = null,
+)
+
+@Serializable
+data class StreamingFunctionCall(
+    val name: String? = null,
+    val arguments: String? = null,
+)
+
 @Serializable
 enum class FinishReason {
     @SerialName("stop")
@@ -63,14 +85,13 @@ enum class FinishReason {
     @SerialName("content_filter")
     CONTENT_FILTER,
 
+    @SerialName("tool_calls")
+    TOOL_CALLS,
+
     @SerialName("error")
     ERROR,
 }
 
-/**
- * One generated alternative in a non-streaming response. We always return a
- * single choice (n = 1).
- */
 @Serializable
 data class Choice(
     val index: Int,
@@ -78,12 +99,6 @@ data class Choice(
     @SerialName("finish_reason") val finishReason: FinishReason,
 )
 
-/**
- * Token-usage accounting block, as expected by every OpenAI client.
- *
- * Counts are estimated using a 4-chars-per-token heuristic since LiteRT does
- * not expose the tokenizer.
- */
 @Serializable
 data class Usage(
     @SerialName("prompt_tokens") val promptTokens: Int,
@@ -91,9 +106,6 @@ data class Usage(
     @SerialName("total_tokens") val totalTokens: Int,
 )
 
-/**
- * Full non-streaming chat completion response.
- */
 @Serializable
 data class ChatCompletionResponse(
     val id: String,
@@ -104,23 +116,13 @@ data class ChatCompletionResponse(
     val usage: Usage,
 )
 
-/**
- * Per-chunk delta payload — only the **new** content for this token.
- *
- * The `role` field is set on the first chunk only (OpenAI convention) so
- * clients can identify the speaker without duplicating the role on every
- * subsequent chunk.
- */
 @Serializable
 data class MessageDelta(
     val role: String? = null,
     val content: String? = null,
+    @SerialName("tool_calls") val toolCalls: List<StreamingToolCall>? = null,
 )
 
-/**
- * One choice in a streaming chunk. `finishReason` is null until the final
- * chunk.
- */
 @Serializable
 data class ChoiceDelta(
     val index: Int,
@@ -128,12 +130,6 @@ data class ChoiceDelta(
     @SerialName("finish_reason") val finishReason: FinishReason? = null,
 )
 
-/**
- * One Server-Sent Event chunk in a streaming chat completion.
- *
- * The OpenAI streaming format wraps each chunk as
- * `data: <json>\n\n`, with a final `data: [DONE]\n\n` sentinel.
- */
 @Serializable
 data class ChatCompletionChunk(
     val id: String,
@@ -143,9 +139,6 @@ data class ChatCompletionChunk(
     val choices: List<ChoiceDelta>,
 )
 
-/**
- * Detail block describing a single error.
- */
 @Serializable
 data class ErrorDetail(
     val message: String,
@@ -154,10 +147,6 @@ data class ErrorDetail(
     val param: String? = null,
 )
 
-/**
- * Top-level error envelope returned for any 4xx/5xx response. Wraps a single
- * [ErrorDetail].
- */
 @Serializable
 data class ErrorResponse(
     val error: ErrorDetail,

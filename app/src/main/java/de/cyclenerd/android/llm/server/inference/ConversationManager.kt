@@ -7,50 +7,24 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.SamplerConfig
 import de.cyclenerd.android.llm.server.perf.PerformanceManager
-import de.cyclenerd.android.llm.server.server.models.ChatMessage
+import de.cyclenerd.android.llm.server.server.models.ChatCompletionRequest
 import de.cyclenerd.android.llm.server.utils.Logger
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/**
- * Manages LLM conversations with support for multi-turn context and
- * system messages.
- *
- * LiteRT constraint: only **one** conversation can exist per engine at a
- * time. We therefore serialise requests with a [Mutex] and recreate the
- * conversation per request — recreation is cheap (~10 ms) and gives us
- * a clean KV-cache, which prevents context bleed between unrelated calls.
- *
- * Performance notes:
- *  - The mutex is fair (FIFO) so we never starve a slow client.
- *  - We boost the inference worker thread to URGENT_AUDIO + big-core
- *    affinity inside [withConversation] so the decode loop runs on the
- *    fastest core the SoC has.
- *  - The mutable list used to build `initialMessages` is sized up-front to
- *    avoid the doubling reallocation pattern of [ArrayList].
- *  - Sampler config is shared across requests (immutable, allocated once).
- */
 class ConversationManager(
     val engine: LlmEngine,
 ) {
     private val tag = "LLMServer:ConversationManager"
-
-    /** Serialises access — LiteRT allows only one open conversation. */
     private val conversationMutex = Mutex()
 
-    /** Track the active conversation so we always close it on cleanup. */
     @Volatile
     private var currentConversation: Conversation? = null
 
     @Volatile
     private var requestCount = 0
 
-    /**
-     * Standardised global sampler. Allocated once, reused everywhere.
-     * Tuned for "creative but coherent" — same defaults as the Gemma
-     * reference implementation.
-     */
-    private val globalSamplerConfig =
+    private val defaultSamplerConfig =
         SamplerConfig(
             temperature = 1.0,
             topP = 0.95,
@@ -58,82 +32,98 @@ class ConversationManager(
         )
 
     init {
-        Logger.i(tag, "Initialized with global config: temp=1.0, topP=0.95, topK=64")
+        Logger.i(tag, "Initialized with default config: temp=1.0, topP=0.95, topK=64")
     }
 
-    /**
-     * Execute [block] inside a fresh conversation seeded with the message
-     * history in [messages]. The conversation is closed automatically.
-     *
-     * The mutex guarantees serial access to the engine; on a heavily
-     * concurrent server this is the right trade-off because LiteRT's
-     * decode kernels saturate the GPU/NPU on a single conversation.
-     */
     suspend fun <R> withConversation(
-        messages: List<ChatMessage>,
-        block: suspend (Conversation) -> R,
+        request: ChatCompletionRequest,
+        block: suspend (Conversation, String) -> R,
     ): R =
         trace("ConversationManager#withConversation") {
             conversationMutex.withLock {
                 requestCount++
                 val reqId = requestCount
-                Logger.d(tag, "Processing request #$reqId with ${messages.size} messages")
-
-                // Boost the worker thread that's about to drive inference.
-                // Each request acquires a coroutine on Dispatchers.Default,
-                // and that worker can vary, so we re-boost every call.
+                Logger.d(tag, "Processing request #$reqId with ${request.messages.size} messages")
                 PerformanceManager.boostCurrentThread("ConversationManager.req$reqId")
-
                 closeCurrentConversation()
-                val conversation = createConversation(messages)
+                val (conversation, userPrompt) = createConversation(request)
                 currentConversation = conversation
                 try {
-                    block(conversation)
+                    block(conversation, userPrompt)
                 } finally {
                     closeCurrentConversation()
                 }
             }
         }
 
-    /**
-     * Build a [Conversation] pre-seeded with system + history.
-     *
-     * The OpenAI message list we receive is split into:
-     *  - The leading system message (becomes `systemInstruction`).
-     *  - All assistant + user messages **except** the trailing user one
-     *    (become `initialMessages`).
-     *  - The trailing user message which is the prompt the caller will
-     *    send via `sendMessageAsync`.
-     */
-    private fun createConversation(messages: List<ChatMessage>): Conversation {
-        val systemMessage = messages.firstOrNull { it.role == "system" }?.content
+    private fun createConversation(request: ChatCompletionRequest): Pair<Conversation, String> {
+        val messages = request.messages
 
-        // Index of the LAST user message — that's the prompt, not history.
+        var systemMessage = messages.firstOrNull { it.role == "system" }?.content
+
+        if (!request.tools.isNullOrEmpty()) {
+            systemMessage = ToolCallParser.buildToolSystemPrompt(request.tools, systemMessage)
+        }
+        if (request.responseFormat?.type == "json_object") {
+            systemMessage = ToolCallParser.buildJsonModePrompt(systemMessage)
+        }
+
         val lastUserIndex = messages.indexOfLast { it.role == "user" }
+        val userPrompt =
+            if (lastUserIndex >= 0) {
+                messages[lastUserIndex].content ?: ""
+            } else {
+                throw IllegalArgumentException("No user message found")
+            }
 
-        // Pre-size the array to avoid the ArrayList growth penalty.
         val initial = ArrayList<Message>(messages.size)
         for (i in messages.indices) {
             val msg = messages[i]
             if (msg.role == "system") continue
             if (msg.role == "user" && i == lastUserIndex) continue
             when (msg.role) {
-                "user" -> initial.add(Message.user(msg.content))
-                "assistant" -> initial.add(Message.model(msg.content))
+                "user" -> initial.add(Message.user(msg.content ?: ""))
+                "assistant" -> {
+                    val text =
+                        if (!msg.toolCalls.isNullOrEmpty()) {
+                            ToolCallParser.formatToolCallsForHistory(msg.toolCalls)
+                        } else {
+                            msg.content ?: ""
+                        }
+                    initial.add(Message.model(text))
+                }
+                "tool" -> {
+                    initial.add(
+                        Message.user(
+                            ToolCallParser.formatToolResultForHistory(msg.toolCallId, msg.name, msg.content),
+                        ),
+                    )
+                }
                 else -> Logger.w(tag, "Unknown role: ${msg.role}, skipping")
             }
         }
 
-        Logger.d(tag, "Creating conversation: systemMsg=${systemMessage != null}, history=${initial.size}")
+        Logger.d(tag, "Creating conversation: systemMsg=${systemMessage != null}, history=${initial.size}, tools=${request.tools?.size ?: 0}")
+
+        val sampler =
+            if (request.temperature != null || request.topP != null || request.topK != null) {
+                SamplerConfig(
+                    temperature = request.temperature?.toDouble() ?: 1.0,
+                    topP = request.topP?.toDouble() ?: 0.95,
+                    topK = request.topK ?: 64,
+                )
+            } else {
+                defaultSamplerConfig
+            }
 
         val config =
             ConversationConfig(
                 systemInstruction = systemMessage?.let { Contents.of(it) },
                 initialMessages = initial,
-                samplerConfig = globalSamplerConfig,
+                samplerConfig = sampler,
             )
 
-        return engine.createConversation(config)
+        return Pair(engine.createConversation(config), userPrompt)
     }
 
     private fun closeCurrentConversation() {
