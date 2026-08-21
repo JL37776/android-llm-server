@@ -1,3 +1,9 @@
+The original repo only support 8gen3 +.
+I degrade the api so it could now support 888 + soc.
+
+
+
+
 # Local LLM Server for Android
 
 **High-performance, private AI on the edge.** Run world-class models like [Google DeepMind's Gemma 4](https://ai.google.dev/gemma/docs/core/model_card_4) locally on your own Android hardware. Powered by Google's [LiteRT](https://ai.google.dev/edge/litert-lm) with [OpenAI-compatible API](api/README.md) access.
